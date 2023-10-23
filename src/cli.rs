@@ -10,6 +10,7 @@ pub struct Config {
     identifier: Option<String>,
     threads: usize,
     threshold: f64,
+    bisulfite: bool,
     read_lengths: Vec<u32>,
     date: DateTime<Local>,
 }
@@ -40,6 +41,8 @@ impl Config {
     }
     
     pub fn date(&self) -> &DateTime<Local> { &self.date }
+    
+    pub fn bisulfite(&self) -> bool { self.bisulfite }
 }
 
 pub fn handle_cli() -> anyhow::Result<Config> {
@@ -75,11 +78,14 @@ pub fn handle_cli() -> anyhow::Result<Config> {
 
     let identifier = m.get_one::<String>("identifier").map(|s| s.to_owned());
 
+    let bisulfite = !m.get_flag("no_bisulfite");
+    
     Ok(Config {
         input,
         prefix,
         identifier,
         threads,
+        bisulfite,
         threshold,
         read_lengths,
         date: Local::now(),

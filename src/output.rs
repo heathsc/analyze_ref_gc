@@ -15,6 +15,7 @@ struct JsOutput<'a, 'b> {
     input: Option<&'a Path>,
     threads: usize,
     threshold: f64,
+    bisulfite: bool,
     read_lengths: &'a [u32],
     results: &'b GcRes,
 }
@@ -27,6 +28,7 @@ impl<'a, 'b> JsOutput<'a, 'b> {
             input: cfg.input(),
             threads: cfg.threads(),
             threshold: cfg.threshold(),
+            bisulfite: cfg.bisulfite(),
             read_lengths: cfg.read_lengths(),
             results,
         }
@@ -46,14 +48,19 @@ fn output_json<P: AsRef<Path>>(name: P, cfg: &Config, res: &GcRes) -> anyhow::Re
         .with_context(|| "Error writing out JSON file with results")
 }
 
-fn output_dist<P: AsRef<Path>>(name: P, read_lengths: &[u32], res: &GcRes) -> anyhow::Result<()> {
+fn output_dist<P: AsRef<Path>>(
+    name: P,
+    read_lengths: &[u32],
+    res: &GcRes,
+    bisulfite: bool,
+) -> anyhow::Result<()> {
     debug!("Writing expected GC distributions output");
     let mut wrt = CompressIo::new()
         .path(name)
         .bufwriter()
         .with_context(|| "Could not open output distribution file")?;
 
-    write_hist(&mut wrt, read_lengths, res)
+    write_hist(&mut wrt, read_lengths, res, bisulfite)
 }
 
 pub fn output(cfg: &Config, res: &GcRes) -> anyhow::Result<()> {
@@ -61,5 +68,5 @@ pub fn output(cfg: &Config, res: &GcRes) -> anyhow::Result<()> {
     output_json(name, cfg, res)?;
 
     let name = format!("{}_dist.txt", cfg.prefix());
-    output_dist(name, cfg.read_lengths(), res)
+    output_dist(name, cfg.read_lengths(), res, cfg.bisulfite())
 }

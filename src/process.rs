@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     ops::AddAssign,
 };
 
@@ -9,14 +9,16 @@ use serde::{Serialize, Serializer};
 
 use crate::{
     cli::Config,
-    reader::{self, GcBase, Seq},
+    reader::{self, Base, Seq},
 };
 
 #[derive(Copy, Clone, Eq, PartialOrd, PartialEq, Hash)]
 pub struct GcHistKey(u32, u32);
 
 impl GcHistKey {
-    pub fn counts(&self) -> (u32, u32) { (self.0, self.1) }
+    pub fn counts(&self) -> (u32, u32) {
+        (self.0, self.1)
+    }
 }
 
 impl Serialize for GcHistKey {
@@ -29,9 +31,10 @@ impl Serialize for GcHistKey {
 }
 
 #[derive(Serialize)]
-struct GcHist {
-    read_length: u32,
+pub struct GcHist {
     counts: HashMap<GcHistKey, u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bisulfite_counts: Option<HashMap<GcHistKey, u64>>,
 }
 
 impl GcHist {
@@ -40,46 +43,73 @@ impl GcHist {
             let e = self.counts.entry(*k).or_insert(0);
             *e += v
         }
+        if let Some(ct) = self.bisulfite_counts.as_mut() {
+            let ct1 = other.bisulfite_counts.as_ref().unwrap();
+            for (k, v) in ct1.iter() {
+                let e = ct.entry(*k).or_insert(0);
+                *e += v
+            }
+        }
     }
 
-    fn new(read_length: u32) -> Self {
+    fn new(bisulfite: bool) -> Self {
+        let bisulfite_counts = if bisulfite {
+            Some(HashMap::new())
+        } else {
+            None
+        };
         Self {
             counts: HashMap::new(),
-            read_length,
+            bisulfite_counts,
         }
     }
     pub fn hash(&self) -> &HashMap<GcHistKey, u64> {
         &self.counts
     }
+
+    pub fn bisulfite_hash(&self) -> Option<&HashMap<GcHistKey, u64>> {
+        self.bisulfite_counts.as_ref()
+    }
 }
 #[derive(Serialize)]
 pub struct GcRes {
-    read_length_specific_counts: Box<[GcHist]>,
+    read_length_specific_counts: BTreeMap<u32, GcHist>,
 }
 
 impl GcRes {
-    pub fn new(rl: &[u32]) -> Self {
-        let v: Vec<_> = rl.iter().map(|l| GcHist::new(*l)).collect();
-        let inner = v.into_boxed_slice();
+    pub fn new(rl: &[u32], bisulfite: bool) -> Self {
+        let inner: BTreeMap<_, _> = rl.iter().map(|l| (*l, GcHist::new(bisulfite))).collect();
         Self {
             read_length_specific_counts: inner,
         }
     }
 
-    fn add_count(&mut self, ix: usize, cts: (u32, u32)) {
-        let e = self.read_length_specific_counts[ix]
+    fn add_count(&mut self, ix: u32, cts: (u32, u32)) {
+        let e = self
+            .read_length_specific_counts
+            .get_mut(&ix)
+            .unwrap()
             .counts
             .entry(GcHistKey(cts.0, cts.1))
             .or_insert(0);
         *e += 1
     }
 
-    pub fn get_hash(&self, ix: usize) -> Option<&HashMap<GcHistKey, u64>> {
-        self.read_length_specific_counts.get(ix).map(|g| g.hash())
+    fn add_bs_count(&mut self, ix: u32, cts: (u32, u32)) {
+        if let Some(c) = self
+            .read_length_specific_counts
+            .get_mut(&ix)
+            .unwrap()
+            .bisulfite_counts
+            .as_mut()
+        {
+            let e = c.entry(GcHistKey(cts.0, cts.1)).or_insert(0);
+            *e += 1
+        }
     }
 
-    pub fn len(&self) -> usize {
-        self.read_length_specific_counts.len()
+    pub fn get_gc_hist(&self, ix: u32) -> Option<&GcHist> {
+        self.read_length_specific_counts.get(&ix)
     }
 }
 
@@ -89,20 +119,20 @@ impl AddAssign for GcRes {
             self.read_length_specific_counts.len(),
             rhs.read_length_specific_counts.len()
         );
-        for (p, q) in self
+        for ((p_key, p_val), (q_key, q_val)) in self
             .read_length_specific_counts
             .iter_mut()
             .zip(rhs.read_length_specific_counts.iter())
         {
-            p.add(q)
+            assert_eq!(*p_key, *q_key);
+            p_val.add(q_val)
         }
     }
 }
 
 #[derive(Copy, Clone)]
 struct Counts {
-    at: u32,
-    gc: u32,
+    counts: [u32; 4],
     threshold: u32,
 }
 
@@ -110,37 +140,42 @@ impl Counts {
     fn new(threshold: u32) -> Self {
         assert!(threshold > 0);
         Self {
-            at: 0,
-            gc: 0,
+            counts: [0; 4],
             threshold,
         }
     }
 
-    fn remove_gc_base(&mut self, base: &GcBase) {
-        if let Some(x) = base.is_gc() {
-            if x {
-                assert!(self.gc > 0);
-                self.gc -= 1
-            } else {
-                assert!(self.at > 0);
-                self.at -= 1
-            }
+    fn remove_base(&mut self, base: &Base) {
+        if !base.is_gap() {
+            let i = *base as usize;
+            assert!(self.counts[i] > 0);
+            self.counts[i] -= 1
         }
     }
 
-    fn add_gc_base(&mut self, base: &GcBase) {
-        if let Some(x) = base.is_gc() {
-            if x {
-                self.gc += 1
-            } else {
-                self.at += 1
-            }
+    fn add_base(&mut self, base: &Base) {
+        if !base.is_gap() {
+            self.counts[*base as usize] += 1
         }
     }
 
     fn get_counts(&self) -> Option<(u32, u32)> {
-        if self.at + self.gc >= self.threshold {
-            Some((self.at, self.gc))
+        if self.counts.iter().sum::<u32>() >= self.threshold {
+            Some((
+                self.counts[Base::A as usize] + self.counts[Base::T as usize],
+                self.counts[Base::C as usize] + self.counts[Base::G as usize],
+            ))
+        } else {
+            None
+        }
+    }
+
+    fn get_bs_counts(&self) -> Option<((u32, u32), (u32, u32))> {
+        if self.counts.iter().sum::<u32>() >= self.threshold {
+            Some((
+                (self.counts[Base::T as usize], self.counts[Base::C as usize]),
+                (self.counts[Base::A as usize], self.counts[Base::G as usize]),
+            ))
         } else {
             None
         }
@@ -148,7 +183,7 @@ impl Counts {
 }
 
 struct Work {
-    buf: VecDeque<GcBase>,
+    buf: VecDeque<Base>,
     counts: Vec<Counts>,
 }
 
@@ -160,7 +195,7 @@ impl Work {
             .map(|l| *l as usize)
             .expect("Empty read length vector");
         let mut buf = VecDeque::with_capacity(max_len);
-        buf.resize_with(max_len, GcBase::default);
+        buf.resize_with(max_len, Base::default);
         let counts: Vec<_> = read_len
             .iter()
             .map(|l| Counts::new(((*l as f64) * threshold).ceil() as u32))
@@ -172,32 +207,43 @@ impl Work {
     fn clear(&mut self) {
         let l = self.buf.len();
         self.buf.clear();
-        self.buf.resize_with(l, GcBase::default);
+        self.buf.resize_with(l, Base::default);
+        for c in self.counts.iter_mut() {
+            c.counts = [0, 0, 0, 0];
+        }
     }
 }
 
 fn process_seq(cfg: &Config, s: Seq, res: &mut GcRes, work: &mut Work) {
     let rl = cfg.read_lengths();
+    work.clear();
     let buf = &mut work.buf;
     let ct = &mut work.counts;
     let max_len = buf.len();
-    let bnone = [GcBase::default()];
+    let bnone = [Base::default()];
     let end = bnone.iter().cycle().take(max_len);
 
     for b in s.iter().chain(end) {
-        // Decremeent counts from bases at start of reads
+        // Decrement counts from bases at start of reads
         for (l, c) in rl.iter().map(|l| *l as usize).zip(ct.iter_mut()) {
             assert!(l <= max_len);
-            c.remove_gc_base(buf.get(max_len - l).unwrap());
+            c.remove_base(buf.get(max_len - l).unwrap());
         }
         // Remove base from start and add new base to end
         buf.pop_front();
         buf.push_back(*b);
         // Increment counts
         for (ix, c) in ct.iter_mut().enumerate() {
-            c.add_gc_base(b);
-            if let Some(cts) = c.get_counts() {
-                res.add_count(ix, cts)
+            c.add_base(b);
+            if cfg.bisulfite() {
+                if let Some((cts1, cts2)) = c.get_bs_counts() {
+                    let cts = (cts1.0 + cts2.0, cts1.1 + cts2.1);
+                    res.add_count(rl[ix], cts);
+                    res.add_bs_count(rl[ix], cts1);
+                    res.add_bs_count(rl[ix], cts2);
+                }
+            } else if let Some(cts) = c.get_counts() {
+                res.add_count(rl[ix], cts)
             }
         }
     }
@@ -205,15 +251,14 @@ fn process_seq(cfg: &Config, s: Seq, res: &mut GcRes, work: &mut Work) {
 
 fn process_thread(cfg: &Config, ix: usize, rx: Receiver<Seq>) -> anyhow::Result<GcRes> {
     debug!("Process task {ix} starting up");
-    let mut res = GcRes::new(cfg.read_lengths());
+    let mut res = GcRes::new(cfg.read_lengths(), cfg.bisulfite());
     let mut work = Work::new(cfg.read_lengths(), cfg.threshold());
-    while let Ok(mut s) = rx.recv() {
+    while let Ok(s) = rx.recv() {
         trace!(
             "Process thread {ix} received new sequence of length {}",
             s.len()
         );
         process_seq(cfg, s, &mut res, &mut work);
-        work.clear()
     }
     debug!("Process task {ix} shutting down");
     Ok(res)
@@ -223,7 +268,7 @@ pub fn process(cfg: &Config) -> anyhow::Result<GcRes> {
     let nt = cfg.threads();
 
     let mut error = false;
-    let mut res = GcRes::new(cfg.read_lengths());
+    let mut res = GcRes::new(cfg.read_lengths(), cfg.bisulfite());
 
     thread::scope(|scope| {
         // Channel used to send sequences to process threads

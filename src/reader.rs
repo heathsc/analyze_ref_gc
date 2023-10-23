@@ -1,7 +1,4 @@
-use std::{
-    io::{BufRead, BufReader},
-    ops::Deref,
-};
+use std::{io::BufRead, ops::Deref};
 
 use anyhow::Context;
 use compress_io::compress::CompressIo;
@@ -12,32 +9,40 @@ use crate::cli::Config;
 /// Some(true) -> C or G
 /// Some(false) -> A or T
 /// None -> N (or other letter)
-#[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
-pub struct GcBase(Option<bool>);
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[repr(u8)]
+pub enum Base {
+    A = 0,
+    C,
+    T,
+    G,
+    N,
+    #[default]
+    Other,
+}
 
-impl GcBase {
+impl Base {
     pub fn from_u8(c: u8) -> Self {
-        Self(match c {
-            b'A' | b'a' | b'T' | b't' => Some(false),
-            b'C' | b'c' | b'G' | b'g' => Some(true),
-            _ => None,
-        })
+        match c {
+            b'A' | b'a' => Self::A,
+            b'C' | b'c' => Self::C,
+            b'G' | b'g' => Self::G,
+            b'T' | b't' => Self::T,
+            b'N' | b'n' => Self::N,
+            _ => Self::Other,
+        }
     }
 
     pub fn is_gap(&self) -> bool {
-        self.0.is_none()
-    }
-
-    pub fn is_gc(&self) -> Option<bool> {
-        self.0
+        self >= &Self::N
     }
 }
 
 #[derive(Debug)]
-pub struct Seq(Vec<GcBase>);
+pub struct Seq(Vec<Base>);
 
 impl Deref for Seq {
-    type Target = [GcBase];
+    type Target = [Base];
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -95,9 +100,9 @@ impl<R: BufRead> Rdr<R> {
                 self.state = match self.state {
                     RdrState::Start => proc_start(*c)?,
                     RdrState::StartSeqId => proc_start_seq_id(*c, &mut self.seq_id)?,
-                    RdrState::StartSeqAfterNewLine => proc_start_seq_after_new_line(*c, &mut v)?,
+                    RdrState::StartSeqAfterNewLine => proc_start_seq_after_new_line(*c)?,
                     RdrState::InSeqId => proc_in_seq_id(*c, &mut self.seq_id)?,
-                    RdrState::StartSeq => match proc_start_seq(*c, &mut v)? {
+                    RdrState::StartSeq => match proc_start_seq(*c)? {
                         RdrState::EndSeq => {
                             if v.is_empty() {
                                 proc_in_seq(*c, Some(&mut v))?
@@ -175,7 +180,7 @@ impl<R: BufRead> Rdr<R> {
 
 fn proc_in_gen(
     c: u8,
-    v: Option<&mut Vec<GcBase>>,
+    v: Option<&mut Vec<Base>>,
     s1: RdrState,
     s2: RdrState,
     s3: RdrState,
@@ -183,7 +188,7 @@ fn proc_in_gen(
     if c == b'\n' {
         Ok(s1)
     } else if c.is_ascii_graphic() {
-        let gc = GcBase::from_u8(c);
+        let gc = Base::from_u8(c);
         if let Some(v) = v {
             v.push(gc)
         }
@@ -193,7 +198,7 @@ fn proc_in_gen(
     }
 }
 
-fn proc_in_gap(c: u8, v: Option<&mut Vec<GcBase>>) -> anyhow::Result<RdrState> {
+fn proc_in_gap(c: u8, v: Option<&mut Vec<Base>>) -> anyhow::Result<RdrState> {
     proc_in_gen(
         c,
         v,
@@ -203,7 +208,7 @@ fn proc_in_gap(c: u8, v: Option<&mut Vec<GcBase>>) -> anyhow::Result<RdrState> {
     )
 }
 
-fn proc_in_long_gap(c: u8, v: Option<&mut Vec<GcBase>>) -> anyhow::Result<RdrState> {
+fn proc_in_long_gap(c: u8, v: Option<&mut Vec<Base>>) -> anyhow::Result<RdrState> {
     proc_in_gen(
         c,
         v,
@@ -215,8 +220,8 @@ fn proc_in_long_gap(c: u8, v: Option<&mut Vec<GcBase>>) -> anyhow::Result<RdrSta
 
 fn proc_after_new_line(
     c: u8,
-    v: Option<&mut Vec<GcBase>>,
-    f: fn(c: u8, v: Option<&mut Vec<GcBase>>) -> anyhow::Result<RdrState>,
+    v: Option<&mut Vec<Base>>,
+    f: fn(c: u8, v: Option<&mut Vec<Base>>) -> anyhow::Result<RdrState>,
 ) -> anyhow::Result<RdrState> {
     if c == b'>' {
         Ok(RdrState::EndSeq)
@@ -225,7 +230,7 @@ fn proc_after_new_line(
     }
 }
 
-fn proc_in_seq(c: u8, v: Option<&mut Vec<GcBase>>) -> anyhow::Result<RdrState> {
+fn proc_in_seq(c: u8, v: Option<&mut Vec<Base>>) -> anyhow::Result<RdrState> {
     proc_in_gen(
         c,
         v,
@@ -235,19 +240,19 @@ fn proc_in_seq(c: u8, v: Option<&mut Vec<GcBase>>) -> anyhow::Result<RdrState> {
     )
 }
 
-fn proc_start_seq_after_new_line(c: u8, v: &mut Vec<GcBase>) -> anyhow::Result<RdrState> {
+fn proc_start_seq_after_new_line(c: u8) -> anyhow::Result<RdrState> {
     if c == b'>' {
         Ok(RdrState::StartSeqId)
     } else {
-        proc_start_seq(c, v)
+        proc_start_seq(c)
     }
 }
 
-fn proc_start_seq(c: u8, v: &mut Vec<GcBase>) -> anyhow::Result<RdrState> {
+fn proc_start_seq(c: u8) -> anyhow::Result<RdrState> {
     if c == b'\n' {
         Ok(RdrState::StartSeqAfterNewLine)
     } else if c.is_ascii_graphic() {
-        let gc = GcBase::from_u8(c);
+        let gc = Base::from_u8(c);
         Ok(if gc.is_gap() {
             RdrState::StartSeq
         } else {
@@ -308,7 +313,9 @@ pub fn reader(cfg: &Config, snd: Sender<Seq>) -> anyhow::Result<()> {
 }
 
 mod test {
+    #[allow(unused_imports)]
     use super::*;
+    #[allow(unused_imports)]
     use std::io::BufReader;
 
     #[test]

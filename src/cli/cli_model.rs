@@ -50,6 +50,12 @@ pub(super) fn cli_model() -> Command {
                 .help("Set threshold (0 > x <= 1) for proportion of bases required"),
         )
         .arg(
+            Arg::new("no_bisulfite")
+                .action(ArgAction::SetTrue)
+                .long("no-bisulfite")
+                .help("Do not generate distributions for bisulfite converted sequences"),
+        )
+        .arg(
             Arg::new("prefix")
                 .short('p')
                 .long("prefix")
