@@ -6,9 +6,6 @@ use crossbeam_channel::Sender;
 
 use crate::cli::Config;
 
-/// Some(true) -> C or G
-/// Some(false) -> A or T
-/// None -> N (or other letter)
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 #[repr(u8)]
 pub enum Base {
