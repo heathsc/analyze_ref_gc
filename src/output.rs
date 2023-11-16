@@ -8,6 +8,8 @@ use crate::{betabin::write_hist, cli::Config, process::GcRes};
 
 #[derive(Serialize)]
 struct JsOutput<'a, 'b> {
+    program: &'static str,
+    version: &'static str,
     date: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     identifier: Option<&'a str>,
@@ -17,12 +19,15 @@ struct JsOutput<'a, 'b> {
     threshold: f64,
     bisulfite: bool,
     read_lengths: &'a [u32],
+    #[serde(flatten)]
     results: &'b GcRes,
 }
 
 impl<'a, 'b> JsOutput<'a, 'b> {
     fn make(cfg: &'a Config, results: &'b GcRes) -> Self {
         Self {
+            program: env!("CARGO_PKG_NAME"),
+            version: env!("CARGO_PKG_VERSION"),
             date: cfg.date().to_rfc2822(),
             identifier: cfg.identifier(),
             input: cfg.input(),
