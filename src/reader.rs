@@ -62,6 +62,7 @@ enum RdrState {
     InLongGapAfterNewLine,
     EndSeq,
     EndSeqAfterLongGap,
+    EndSeqAfterInitialGap,
 }
 
 struct Rdr<R: BufRead> {
@@ -149,6 +150,11 @@ impl<R: BufRead> Rdr<R> {
                         used = if ix > 0 { ix - 1 } else { ix };
                         seq_ready = true;
                         RdrState::StartSeq
+                    }
+                    RdrState::EndSeqAfterInitialGap => {
+                        used = if ix > 0 { ix - 1 } else { ix };
+                        seq_ready = true;
+                        RdrState::InSeq
                     }
                 };
                 if seq_ready {
@@ -253,7 +259,7 @@ fn proc_start_seq(c: u8) -> anyhow::Result<RdrState> {
         Ok(if gc.is_gap() {
             RdrState::StartSeq
         } else {
-            RdrState::EndSeq
+            RdrState::EndSeqAfterInitialGap
         })
     } else {
         Err(anyhow!("Illegal character in sequence"))
