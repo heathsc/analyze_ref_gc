@@ -289,7 +289,7 @@ pub fn process(cfg: &Config) -> anyhow::Result<GcRes> {
 
         // Wait for analysis threads
         for jh in process_tasks.drain(..) {
-            match jh.join().expect("Error joining analysis thread thread") {
+            match jh.join().expect("Error joining analysis thread") {
                 Err(e) => {
                     error!("{:?}", e);
                     error = true
