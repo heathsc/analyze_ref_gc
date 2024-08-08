@@ -1,8 +1,11 @@
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use chrono::{DateTime, Local};
 
 mod cli_model;
+
+use crate::regions::{Regions, read_bed::read_bed};
 
 pub struct Config {
     input: Option<PathBuf>,
@@ -12,6 +15,7 @@ pub struct Config {
     threshold: f64,
     bisulfite: bool,
     read_lengths: Vec<u32>,
+    target: Option<Regions>,
     date: DateTime<Local>,
 }
 
@@ -43,6 +47,10 @@ impl Config {
     pub fn date(&self) -> &DateTime<Local> { &self.date }
     
     pub fn bisulfite(&self) -> bool { self.bisulfite }
+    
+    pub fn target_regions(&self) -> Option<&Regions> {
+        self.target.as_ref()
+    }
 }
 
 pub fn handle_cli() -> anyhow::Result<Config> {
@@ -52,6 +60,14 @@ pub fn handle_cli() -> anyhow::Result<Config> {
 
     let input = m.get_one::<PathBuf>("input").map(|p| p.to_owned());
 
+    let target = match m.get_one::<PathBuf>("targets") {
+        Some(p) => {
+            let extend = m.get_one::<u32>("target_extend").copied().expect("Missing default for target_extend");
+            Some(read_bed(p, extend).with_context(|| format!("Error reading target regions from {}", p.display()))?)
+        },
+        None => None
+    };
+    
     let threads = m
         .get_one::<u64>("threads")
         .map(|x| *x as usize)
@@ -88,6 +104,7 @@ pub fn handle_cli() -> anyhow::Result<Config> {
         bisulfite,
         threshold,
         read_lengths,
+        target,
         date: Local::now(),
     })
 }
