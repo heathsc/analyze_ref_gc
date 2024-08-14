@@ -1,11 +1,12 @@
-use std::{io::BufRead, ops::Deref};
-
 use anyhow::Context;
 use compress_io::compress::CompressIo;
 use crossbeam_channel::Sender;
+use std::{fmt, io::BufRead, num::NonZeroU32, ops::Deref, path::PathBuf};
 
 use crate::{
     cli::Config,
+    kmcv,
+    kmers::{KmerBuilder, KmerType, KmerWork},
     regions::{Region, Regions},
 };
 
@@ -34,7 +35,7 @@ impl Base {
     }
 
     pub fn is_gap(&self) -> bool {
-        self >= &Self::N
+        ((*self as usize) & 4) == 4
     }
 }
 
@@ -72,17 +73,21 @@ impl<'a> RegionState<'a> {
     }
 
     /// Returns true if position matches a target region
-    fn check_pos(&mut self, pos: u32) -> bool {
+    fn check_pos(&mut self, pos: u32) -> Option<NonZeroU32> {
         while let Some(v) = self.region_slice {
             // As long as we use the API, v should always be non-empty
             let r = v[0];
             if pos > r.end() {
                 self.advance()
             } else {
-                return pos >= r.start();
+                return if pos >= r.start() {
+                    Some(r.idx())
+                } else {
+                    None
+                };
             }
         }
-        false
+        None
     }
 }
 
@@ -97,7 +102,7 @@ impl Deref for Seq {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum RdrState {
     Start,
     StartSeqId,
@@ -117,6 +122,57 @@ enum RdrState {
     NewContig,
 }
 
+enum KWork {
+    KU8(KmerWork<u8>),
+    KU16(KmerWork<u16>),
+    KU32(KmerWork<u32>),
+    KU64(KmerWork<u64>),
+}
+
+impl fmt::Display for KWork {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::KU8(kw) => write!(f, "{kw}"),
+            Self::KU16(kw) => write!(f, "{kw}"),
+            Self::KU32(kw) => write!(f, "{kw}"),
+            Self::KU64(kw) => write!(f, "{kw}"),
+        }
+    }
+}
+impl KWork {
+    fn new(sz: usize) -> Self {
+        if sz <= 1 << (u8::BITS - 1) {
+            Self::KU8(KmerWork::new(sz))
+        } else if sz <= 1 << (u16::BITS - 1) {
+            Self::KU16(KmerWork::new(sz))
+        } else if sz <= 1 << (u32::BITS - 1) {
+            Self::KU32(KmerWork::new(sz))
+        } else if sz <= 1 << (u64::BITS - 1) {
+            Self::KU64(KmerWork::new(sz))
+        } else {
+            panic!("Too many regions specified")
+        }
+    }
+
+    fn add_kmer(&mut self, kmer: KmerType, region: Option<NonZeroU32>) {
+        match self {
+            Self::KU8(kw) => kw.add_kmer(kmer, region),
+            Self::KU16(kw) => kw.add_kmer(kmer, region),
+            Self::KU32(kw) => kw.add_kmer(kmer, region),
+            Self::KU64(kw) => kw.add_kmer(kmer, region),
+        }
+    }
+
+    fn on_target_kmers(self) -> Vec<Vec<KmerType>> {
+        match self {
+            Self::KU8(kw) => kw.on_target_kmers(),
+            Self::KU16(kw) => kw.on_target_kmers(),
+            Self::KU32(kw) => kw.on_target_kmers(),
+            Self::KU64(kw) => kw.on_target_kmers(),
+        }
+    }
+}
+
 struct Rdr<'a, R: BufRead> {
     r: R,
     state: RdrState,
@@ -124,16 +180,33 @@ struct Rdr<'a, R: BufRead> {
     max_read_length: u32,
     pos: u32,
     target_state: Option<RegionState<'a>>,
+    k_work: KWork,
+    kmer_build: KmerBuilder,
+}
+
+struct SeqWork<'a> {
+    v: Vec<Base>,
+    k_work: &'a mut KWork,
+    k_build: &'a mut KmerBuilder,
 }
 
 impl<'a, R: BufRead> Rdr<'a, R> {
     fn new(r: R, max_read_length: u32, target_regions: Option<&'a Regions>) -> Self {
         let state = RdrState::Start;
         let seq_id = String::new();
+
+        let n_regions = if let Some(t) = target_regions.as_ref() {
+            t.len()
+        } else {
+            0
+        };
+
         let target_state = target_regions.map(|r| RegionState {
             regions: r,
             region_slice: None,
         });
+
+        let k_work = KWork::new(n_regions);
 
         Self {
             r,
@@ -142,13 +215,21 @@ impl<'a, R: BufRead> Rdr<'a, R> {
             max_read_length,
             pos: 0,
             target_state,
+            k_work,
+            kmer_build: KmerBuilder::new(),
         }
     }
 
     fn get_seq(&mut self) -> anyhow::Result<Option<Seq>> {
-        let mut v = Vec::new();
+        let v = Vec::new();
         let mut gap = 0;
         let mut ts = self.target_state.take();
+        let mut seq_work = SeqWork {
+            v,
+            k_work: &mut self.k_work,
+            k_build: &mut self.kmer_build,
+        };
+
         loop {
             let buf = self.r.fill_buf()?;
             if buf.is_empty() {
@@ -157,55 +238,65 @@ impl<'a, R: BufRead> Rdr<'a, R> {
             let mut used = 0;
             let mut seq_ready = false;
             for (ix, c) in buf.iter().enumerate() {
-                let ot = if let Some(t) = ts.as_mut() {
+                let idx = if let Some(t) = ts.as_mut() {
                     t.check_pos(self.pos)
                 } else {
                     // If not targets are set, everything is on target!
-                    true
+                    None
                 };
+                trace!(
+                    "pos = {}, idx = {:?}, state = {:?}",
+                    self.pos,
+                    idx,
+                    self.state
+                );
                 let (new_state, inc_pos) = match self.state {
                     RdrState::Start => (proc_start(*c)?, false),
                     RdrState::StartSeqId => (proc_start_seq_id(*c, &mut self.seq_id)?, false),
-                    RdrState::StartSeqAfterNewLine => proc_start_seq_after_new_line(*c, ot)?,
+                    RdrState::StartSeqAfterNewLine => proc_start_seq_after_new_line(*c)?,
                     RdrState::InSeqId => (proc_in_seq_id(*c, &mut self.seq_id)?, false),
                     RdrState::NewContig => {
-                        debug!("Starting reading contig {}", self.seq_id);
+                        debug!(
+                            "Starting reading contig {}\n{}",
+                            self.seq_id, seq_work.k_work
+                        );
                         if let Some(regs) = ts.as_mut() {
                             regs.new_contig(&self.seq_id)
                         }
+                        seq_work.k_build.clear();
                         self.pos = 0;
-                        proc_start_seq(*c, ot)?
+                        proc_start_seq(*c)?
                     }
-                    RdrState::StartSeq => proc_start_seq(*c, ot)?,
+                    RdrState::StartSeq => proc_start_seq(*c)?,
                     RdrState::InSeq => {
                         gap = 0;
-                        proc_in_seq(*c, Some(&mut v), ot)?
+                        proc_in_seq(*c, Some(&mut seq_work), idx)?
                     }
                     RdrState::InSeqAfterNewLine => {
-                        proc_after_new_line(*c, Some(&mut v), proc_in_seq, ot)?
+                        proc_after_new_line(*c, Some(&mut seq_work), proc_in_seq, idx)?
                     }
                     RdrState::InGapAfterNewLine => {
-                        proc_after_new_line(*c, Some(&mut v), proc_in_gap, ot)?
+                        proc_after_new_line(*c, Some(&mut seq_work), proc_in_gap, idx)?
                     }
                     RdrState::InLongGapAfterNewLine => {
-                        proc_after_new_line(*c, None, proc_in_long_gap, ot)?
+                        proc_after_new_line(*c, None, proc_in_long_gap, idx)?
                     }
                     RdrState::StartGap => {
                         gap = 1;
-                        proc_in_gap(*c, Some(&mut v), ot)?
+                        proc_in_gap(*c, Some(&mut seq_work), idx)?
                     }
                     RdrState::InGap => {
                         gap += 1;
                         if gap >= self.max_read_length {
-                            assert!(v.len() > gap as usize);
-                            v.truncate(v.len() - gap as usize);
+                            assert!(seq_work.v.len() > gap as usize);
+                            seq_work.v.truncate(seq_work.v.len() - gap as usize);
                             gap = 0;
-                            proc_in_long_gap(*c, None, ot)?
+                            proc_in_long_gap(*c, None, idx)?
                         } else {
-                            proc_in_gap(*c, Some(&mut v), ot)?
+                            proc_in_gap(*c, Some(&mut seq_work), idx)?
                         }
                     }
-                    RdrState::InLongGap => proc_in_long_gap(*c, None, ot)?,
+                    RdrState::InLongGap => proc_in_long_gap(*c, None, idx)?,
                     RdrState::EndSeq => {
                         used = ix;
                         seq_ready = true;
@@ -244,33 +335,53 @@ impl<'a, R: BufRead> Rdr<'a, R> {
                 buf.len()
             };
             self.r.consume(used);
-            if seq_ready && !v.is_empty() {
+            if seq_ready && !seq_work.v.is_empty() {
                 break;
             }
         }
+
+        self.target_state = ts;
+        let SeqWork {
+            mut v,
+            k_work: _,
+            k_build: _,
+        } = seq_work;
+
         if gap > 0 {
             assert!(v.len() >= gap as usize);
             v.truncate(v.len() - gap as usize);
         }
-        self.target_state = ts;
+
         Ok(if v.is_empty() { None } else { Some(Seq(v)) })
     }
 }
 
 fn proc_in_gen(
     c: u8,
-    v: Option<&mut Vec<Base>>,
+    sw: Option<&mut SeqWork>,
     s1: RdrState,
     s2: RdrState,
     s3: RdrState,
-    on_target: bool,
+    target_idx: Option<NonZeroU32>,
 ) -> anyhow::Result<(RdrState, bool)> {
     if c == b'\n' {
         Ok((s1, false))
     } else if c.is_ascii_graphic() {
-        let gc = if on_target { Base::from_u8(c) } else { Base::N };
-        if let Some(v) = v {
-            v.push(gc)
+        let gc = Base::from_u8(c);
+        if let Some(s) = sw {
+            s.v.push(if target_idx.is_some() { gc } else { Base::N });
+            s.k_build.add_base(gc, target_idx);
+            trace!(
+                "base: {:?}, kmer: {:?}, idx: {:?}",
+                gc,
+                s.k_build.kmer(),
+                s.k_build.target_idx()
+            );
+            if let Some(k) = s.k_build.kmer() {
+                s.k_work.add_kmer(k, s.k_build.target_idx())
+            }
+        } else {
+            trace!("No SeqWork. Base: {:?}", gc);
         }
         Ok(if gc.is_gap() { (s2, true) } else { (s3, true) })
     } else {
@@ -280,75 +391,79 @@ fn proc_in_gen(
 
 fn proc_in_gap(
     c: u8,
-    v: Option<&mut Vec<Base>>,
-    on_target: bool,
+    sw: Option<&mut SeqWork>,
+    target_idx: Option<NonZeroU32>,
 ) -> anyhow::Result<(RdrState, bool)> {
     proc_in_gen(
         c,
-        v,
+        sw,
         RdrState::InGapAfterNewLine,
         RdrState::InGap,
         RdrState::InSeq,
-        on_target,
+        target_idx,
     )
 }
 
 fn proc_in_long_gap(
     c: u8,
-    v: Option<&mut Vec<Base>>,
-    on_target: bool,
+    sw: Option<&mut SeqWork>,
+    target_idx: Option<NonZeroU32>,
 ) -> anyhow::Result<(RdrState, bool)> {
     proc_in_gen(
         c,
-        v,
+        sw,
         RdrState::InLongGapAfterNewLine,
         RdrState::InLongGap,
         RdrState::EndSeqAfterLongGap,
-        on_target,
+        target_idx,
     )
 }
 
 fn proc_after_new_line(
     c: u8,
-    v: Option<&mut Vec<Base>>,
-    f: fn(c: u8, v: Option<&mut Vec<Base>>, on_target: bool) -> anyhow::Result<(RdrState, bool)>,
-    on_target: bool,
+    sw: Option<&mut SeqWork>,
+    f: fn(
+        c: u8,
+        v: Option<&mut SeqWork>,
+        target_idx: Option<NonZeroU32>,
+    ) -> anyhow::Result<(RdrState, bool)>,
+    target_idx: Option<NonZeroU32>,
 ) -> anyhow::Result<(RdrState, bool)> {
     if c == b'>' {
         Ok((RdrState::EndSeq, false))
     } else {
-        f(c, v, on_target)
+        f(c, sw, target_idx)
     }
 }
 
 fn proc_in_seq(
     c: u8,
-    v: Option<&mut Vec<Base>>,
-    on_target: bool,
+    sw: Option<&mut SeqWork>,
+    target_idx: Option<NonZeroU32>,
 ) -> anyhow::Result<(RdrState, bool)> {
     proc_in_gen(
         c,
-        v,
+        sw,
         RdrState::InSeqAfterNewLine,
         RdrState::StartGap,
         RdrState::InSeq,
-        on_target,
+        target_idx,
     )
 }
 
-fn proc_start_seq_after_new_line(c: u8, on_target: bool) -> anyhow::Result<(RdrState, bool)> {
+fn proc_start_seq_after_new_line(c: u8) -> anyhow::Result<(RdrState, bool)> {
     if c == b'>' {
         Ok((RdrState::StartSeqId, false))
     } else {
-        proc_start_seq(c, on_target)
+        proc_start_seq(c)
     }
 }
 
-fn proc_start_seq(c: u8, on_target: bool) -> anyhow::Result<(RdrState, bool)> {
+fn proc_start_seq(c: u8) -> anyhow::Result<(RdrState, bool)> {
     if c == b'\n' {
         Ok((RdrState::StartSeqAfterNewLine, false))
     } else if c.is_ascii_graphic() {
-        let gc = if on_target { Base::from_u8(c) } else { Base::N };
+        let gc = Base::from_u8(c);
         Ok((
             if gc.is_gap() {
                 RdrState::StartSeq
@@ -409,7 +524,15 @@ pub fn reader(cfg: &Config, snd: Sender<Seq>) -> anyhow::Result<()> {
             .with_context(|| "Error sending sequence for processing")?;
     }
     info!("Finished reading input");
-
+    let k_work = rdr.k_work;
+    info!("{k_work}");
+    if let Some(tr) = cfg.target_regions() {
+        info!("Outputting information on unique kmers");
+        let unique_kmers = k_work.on_target_kmers();
+        let output = "unique_on_target_kmers.km";
+        kmcv::output_kmers(&output, &unique_kmers)
+            .with_context(|| format!("Could not generate output kmer file {output}"))?;
+    }
     Ok(())
 }
 

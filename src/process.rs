@@ -214,7 +214,7 @@ impl Work {
     }
 }
 
-fn process_seq(cfg: &Config, s: Seq, res: &mut GcRes, work: &mut Work) {
+fn process_seq(cfg: &Config, s: &Seq, res: &mut GcRes, work: &mut Work) {
     let rl = cfg.read_lengths();
     work.clear();
     let buf = &mut work.buf;
@@ -258,7 +258,7 @@ fn process_thread(cfg: &Config, ix: usize, rx: Receiver<Seq>) -> anyhow::Result<
             "Process thread {ix} received new sequence of length {}",
             s.len()
         );
-        process_seq(cfg, s, &mut res, &mut work);
+        process_seq(cfg, &s, &mut res, &mut work);
     }
     debug!("Process task {ix} shutting down");
     Ok(res)
