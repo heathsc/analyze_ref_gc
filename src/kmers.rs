@@ -10,7 +10,7 @@ use std::{
 use crate::reader::Base;
 
 pub type KmerType = u32;
-pub static KMER_LENGTH: usize = 16;
+pub const KMER_LENGTH: usize = 16;
 
 pub struct KmerWork<T> {
     kmers: HashMap<KmerType, T>,
@@ -157,7 +157,7 @@ where
 }
 
 /// Returns (x, valid)
-/// Where x is 0, 1, 2, 3 for A, C, G, T and 0 otherwise (with valid being false)
+/// Where x is 0, 1, 2, 3 for A, C, T, G and 0 otherwise (with valid being false)
 fn decode_base(b: Base) -> (u8, u8) {
     let b = b as u8;
     (b & 3, ((b & 4) >> 2) ^ 1)
@@ -166,12 +166,14 @@ fn decode_base(b: Base) -> (u8, u8) {
 pub struct KmerBuilder {
     target_vec: VecDeque<Option<NonZeroU32>>,
     kmer: KmerType,
+    rev_kmer: KmerType,
     valid: KmerType,
     mask: KmerType,
     valid_mask: KmerType,
 }
 
 impl KmerBuilder {
+    const REV_SHIFT: usize = (KMER_LENGTH - 1) << 1;
     pub fn new() -> Self {
         let k = KMER_LENGTH;
         let nb = KmerType::BITS as usize;
@@ -183,10 +185,10 @@ impl KmerBuilder {
         }
 
         const ZERO: KmerType = 0;
-        debug!("mask = {:x}", (!ZERO) >> (nb - k - k));
         Self {
             target_vec,
             kmer: 0,
+            rev_kmer: 0,
             valid: 0,
             mask: (!ZERO) >> (nb - k - k),
             valid_mask: (!ZERO) >> (nb - k),
@@ -199,13 +201,16 @@ impl KmerBuilder {
         }
         self.valid = 0;
         self.kmer = 0;
+        self.rev_kmer = 0;
     }
 
     pub fn add_base(&mut self, base: Base, region_idx: Option<NonZeroU32>) {
         let _ = self.target_vec.pop_front().unwrap();
         let (x, valid) = decode_base(base);
+        let rev_x = (x + 2) & 3;
         self.target_vec.push_back(region_idx);
         self.kmer = ((self.kmer << 2) & self.mask) | (x as KmerType);
+        self.rev_kmer = (self.rev_kmer >> 2) | ((rev_x as KmerType) << Self::REV_SHIFT);
         self.valid = ((self.valid << 1) & self.valid_mask) | (valid as KmerType);
     }
 
@@ -225,9 +230,9 @@ impl KmerBuilder {
 
     /// Check if kmer is composed entirely of valid (i.e., A, C, G, T) bases
     #[inline]
-    pub fn kmer(&self) -> Option<KmerType> {
+    pub fn kmers(&self) -> Option<[KmerType; 2]> {
         if self.valid == self.valid_mask {
-            Some(self.kmer)
+            Some([self.kmer, self.rev_kmer])
         } else {
             None
         }

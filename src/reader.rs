@@ -1,7 +1,7 @@
 use anyhow::Context;
 use compress_io::compress::CompressIo;
 use crossbeam_channel::Sender;
-use std::{fmt, io::BufRead, num::NonZeroU32, ops::Deref, path::PathBuf};
+use std::{fmt, io::BufRead, num::NonZeroU32, ops::Deref};
 
 use crate::{
     cli::Config,
@@ -372,13 +372,15 @@ fn proc_in_gen(
             s.v.push(if target_idx.is_some() { gc } else { Base::N });
             s.k_build.add_base(gc, target_idx);
             trace!(
-                "base: {:?}, kmer: {:?}, idx: {:?}",
+                "base: {:?}, kmers: {:?}, idx: {:?}",
                 gc,
-                s.k_build.kmer(),
+                s.k_build.kmers(),
                 s.k_build.target_idx()
             );
-            if let Some(k) = s.k_build.kmer() {
-                s.k_work.add_kmer(k, s.k_build.target_idx())
+            if let Some(k) = s.k_build.kmers() {
+                let idx = s.k_build.target_idx();
+                s.k_work.add_kmer(k[0], idx);
+                s.k_work.add_kmer(k[1], idx);
             }
         } else {
             trace!("No SeqWork. Base: {:?}", gc);
@@ -526,10 +528,12 @@ pub fn reader(cfg: &Config, snd: Sender<Seq>) -> anyhow::Result<()> {
     info!("Finished reading input");
     let k_work = rdr.k_work;
     info!("{k_work}");
-    if let Some(tr) = cfg.target_regions() {
+    if cfg.target_regions().is_some() {
         info!("Outputting information on unique kmers");
         let unique_kmers = k_work.on_target_kmers();
-        let output = "unique_on_target_kmers.km";
+
+        let output = format!("{}_unique_kmers.km", cfg.prefix());
+
         kmcv::output_kmers(&output, &unique_kmers)
             .with_context(|| format!("Could not generate output kmer file {output}"))?;
     }

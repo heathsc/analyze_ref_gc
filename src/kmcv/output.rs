@@ -14,12 +14,12 @@ const MIN_KMERS: usize = 10;
 
 #[inline]
 fn u32_to_buf(b: &mut [u8], x: u32) {
-    b.copy_from_slice(&x.to_be_bytes())
+    b.copy_from_slice(&x.to_le_bytes())
 }
 
 #[inline]
 fn u64_to_buf(b: &mut [u8], x: u64) {
-    b.copy_from_slice(&x.to_be_bytes())
+    b.copy_from_slice(&x.to_le_bytes())
 }
 fn write_header<W: Write>(
     w: &mut W,
@@ -63,10 +63,10 @@ fn write_header<W: Write>(
 
 fn write_target_block<W: Write>(w: &mut W, v: &[KmerType]) -> anyhow::Result<()> {
     let n = v.len() as u32;
-    w.write_all(&n.to_be_bytes())
+    w.write_all(&n.to_le_bytes())
         .with_context(|| "Error writing target length")?;
     for k in v.iter() {
-        w.write_all(&k.to_be_bytes())
+        w.write_all(&k.to_le_bytes())
             .with_context(|| "Error writing kmer")?;
     }
     Ok(())
@@ -80,9 +80,6 @@ fn write_close<W: Write>(w: &mut W, rnd_id: u32) -> anyhow::Result<()> {
         .with_context(|| "Error writing closing block to kmer file")
 }
 pub fn output_kmers<P: AsRef<Path>>(path: P, kmers: &[Vec<KmerType>]) -> anyhow::Result<()> {
-    //let mut w =
-    //    BufWriter::new(File::create(path).with_context(|| "Could not open kmer file for output")?);
-
     let mut w = CompressIo::new()
         .path(path)
         .fix_path()
