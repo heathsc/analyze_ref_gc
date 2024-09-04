@@ -6,7 +6,7 @@
 /// major: u8  - Version
 /// minor: u8
 /// kmer length: u8
-/// unused: u8 (should be set to zero)
+/// max_hits: u8
 /// rnd_id: u32
 /// n_contigs: u32
 /// n_targets: u32

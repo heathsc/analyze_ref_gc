@@ -8,7 +8,7 @@ use compress_io::{
 use rand::random;
 
 use crate::{
-    kmers::{KmerVec, KmerWork, KMER_LENGTH},
+    kmers::{KmerVec, KmerWork, KMER_LENGTH, MAX_HITS},
     regions::Regions,
 };
 
@@ -43,6 +43,7 @@ impl KmcvHeader {
         buf[4] = MAJOR_VERSION;
         buf[5] = MINOR_VERSION;
         buf[6] = KMER_LENGTH as u8;
+        buf[7] = MAX_HITS as u8;
         u32_to_buf(&mut buf[8..12], rnd_id);
         u32_to_buf(&mut buf[12..16], n_contigs);
         u32_to_buf(&mut buf[16..20], n_targets);
