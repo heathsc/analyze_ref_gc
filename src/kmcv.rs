@@ -8,9 +8,11 @@
 /// kmer length: u8
 /// unused: u8 (should be set to zero)
 /// rnd_id: u32
-/// n_targets: u32
-/// n_kmers: u64
 /// n_contigs: u32
+/// n_targets: u32
+/// mapped_kmers: u64
+/// on_target_kmers: u64
+/// redundant_kmers: u64
 ///
 /// CONTIG BLOCK (Repeated n_contig times)
 ///   name_length: u32
