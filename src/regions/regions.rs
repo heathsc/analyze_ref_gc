@@ -33,11 +33,6 @@ impl Region {
     }
 
     #[inline]
-    pub fn size(&self) -> u32 {
-        self.size
-    }
-
-    #[inline]
     pub fn idx(&self) -> NonZeroU32 {
         self.idx
     }
@@ -54,10 +49,6 @@ pub struct ContigRegions {
 }
 
 impl ContigRegions {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn add_region(&mut self, r: Region) {
         self.regions.push(r)
     }
@@ -105,10 +96,6 @@ pub struct Regions {
 }
 
 impl Regions {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn get(&self, contig: &str) -> Option<&ContigRegions> {
         self.hash.get(contig)
     }
@@ -130,11 +117,15 @@ impl Regions {
         ix
     }
 
-    pub fn len(&self) -> usize {
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &ContigRegions)> {
+        self.hash.iter().map(|(s, r)| (s.as_ref(), r))
+    }
+
+    pub fn n_regions(&self) -> usize {
         self.hash.values().map(|r| r.regions().len()).sum()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.hash.is_empty()
+    pub fn n_contigs(&self) -> usize {
+        self.hash.len()
     }
 }

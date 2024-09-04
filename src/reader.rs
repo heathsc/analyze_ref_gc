@@ -1,12 +1,12 @@
 use anyhow::Context;
 use compress_io::compress::CompressIo;
 use crossbeam_channel::Sender;
-use std::{fmt, io::BufRead, num::NonZeroU32, ops::Deref};
+use std::{io::BufRead, num::NonZeroU32, ops::Deref};
 
 use crate::{
     cli::Config,
     kmcv,
-    kmers::{KmerBuilder, KmerType, KmerWork},
+    kmers::{KmerBuilder, KmerWork},
     regions::{Region, Regions},
 };
 
@@ -122,57 +122,6 @@ enum RdrState {
     NewContig,
 }
 
-enum KWork {
-    KU8(KmerWork<u8>),
-    KU16(KmerWork<u16>),
-    KU32(KmerWork<u32>),
-    KU64(KmerWork<u64>),
-}
-
-impl fmt::Display for KWork {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::KU8(kw) => write!(f, "{kw}"),
-            Self::KU16(kw) => write!(f, "{kw}"),
-            Self::KU32(kw) => write!(f, "{kw}"),
-            Self::KU64(kw) => write!(f, "{kw}"),
-        }
-    }
-}
-impl KWork {
-    fn new(sz: usize) -> Self {
-        if sz <= 1 << (u8::BITS - 1) {
-            Self::KU8(KmerWork::new(sz))
-        } else if sz <= 1 << (u16::BITS - 1) {
-            Self::KU16(KmerWork::new(sz))
-        } else if sz <= 1 << (u32::BITS - 1) {
-            Self::KU32(KmerWork::new(sz))
-        } else if sz <= 1 << (u64::BITS - 1) {
-            Self::KU64(KmerWork::new(sz))
-        } else {
-            panic!("Too many regions specified")
-        }
-    }
-
-    fn add_kmer(&mut self, kmer: KmerType, region: Option<NonZeroU32>) {
-        match self {
-            Self::KU8(kw) => kw.add_kmer(kmer, region),
-            Self::KU16(kw) => kw.add_kmer(kmer, region),
-            Self::KU32(kw) => kw.add_kmer(kmer, region),
-            Self::KU64(kw) => kw.add_kmer(kmer, region),
-        }
-    }
-
-    fn on_target_kmers(self) -> Vec<Vec<KmerType>> {
-        match self {
-            Self::KU8(kw) => kw.on_target_kmers(),
-            Self::KU16(kw) => kw.on_target_kmers(),
-            Self::KU32(kw) => kw.on_target_kmers(),
-            Self::KU64(kw) => kw.on_target_kmers(),
-        }
-    }
-}
-
 struct Rdr<'a, R: BufRead> {
     r: R,
     state: RdrState,
@@ -180,13 +129,13 @@ struct Rdr<'a, R: BufRead> {
     max_read_length: u32,
     pos: u32,
     target_state: Option<RegionState<'a>>,
-    k_work: KWork,
+    k_work: KmerWork,
     kmer_build: KmerBuilder,
 }
 
 struct SeqWork<'a> {
     v: Vec<Base>,
-    k_work: &'a mut KWork,
+    k_work: &'a mut KmerWork,
     k_build: &'a mut KmerBuilder,
 }
 
@@ -195,18 +144,12 @@ impl<'a, R: BufRead> Rdr<'a, R> {
         let state = RdrState::Start;
         let seq_id = String::new();
 
-        let n_regions = if let Some(t) = target_regions.as_ref() {
-            t.len()
-        } else {
-            0
-        };
-
         let target_state = target_regions.map(|r| RegionState {
             regions: r,
             region_slice: None,
         });
 
-        let k_work = KWork::new(n_regions);
+        let k_work = KmerWork::new();
 
         Self {
             r,
@@ -528,13 +471,12 @@ pub fn reader(cfg: &Config, snd: Sender<Seq>) -> anyhow::Result<()> {
     info!("Finished reading input");
     let k_work = rdr.k_work;
     info!("{k_work}");
-    if cfg.target_regions().is_some() {
-        info!("Outputting information on unique kmers");
-        let unique_kmers = k_work.on_target_kmers();
+    if let Some(reg) = cfg.target_regions() {
+        info!("Outputting information on kmers");
 
-        let output = format!("{}_unique_kmers.km", cfg.prefix());
+        let output = format!("{}_kmers.km", cfg.prefix());
 
-        kmcv::output_kmers(&output, &unique_kmers)
+        kmcv::output_kmers(&output, reg, &k_work)
             .with_context(|| format!("Could not generate output kmer file {output}"))?;
     }
     Ok(())
