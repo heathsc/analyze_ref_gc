@@ -13,6 +13,7 @@
 /// mapped_kmers: u64
 /// on_target_kmers: u64
 /// redundant_kmers: u64
+/// total_hits: u64
 ///
 /// CONTIG BLOCK (Repeated n_contig times)
 ///   name_length: u32

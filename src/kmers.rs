@@ -13,17 +13,19 @@ pub struct KmerWork {
     on_target_kmers: u64,
     mapped_kmers: u64,
     highly_redundant_kmers: u64,
+    total_hits: u64,
 }
 
 impl fmt::Display for KmerWork {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Number of kmers: {}, mapped: {}, on target: {}, highly_redundant: {}",
+            "Number of kmers: {}, mapped: {}, on target: {}, highly_redundant: {}, total_hits: {}",
             self.kmers.len(),
             self.mapped_kmers,
             self.on_target_kmers,
-            self.highly_redundant_kmers
+            self.highly_redundant_kmers,
+            self.total_hits(),
         )
     }
 }
@@ -39,6 +41,7 @@ impl KmerWork {
             on_target_kmers: 0,
             mapped_kmers: 0,
             highly_redundant_kmers: 0,
+            total_hits: 0,
         }
     }
     pub fn add_kmer(&mut self, kmer: KType, region: Option<NonZeroU32>) {
@@ -46,19 +49,21 @@ impl KmerWork {
         assert!(r as usize <= self.max_region, "Region id too large!");
 
         let km = kmer as usize;
-        let mut set_mm = true;
         let v = &mut self.kmers[km];
         if v[0] == 0 {
             self.mapped_kmers += 1;
             if r > 0 {
                 self.on_target_kmers += 1;
             }
-        } else if v[0] == 1 && v[1] == 0 && r > 0 {
+        } else if v[1] == 0 && v[0] == 1 && r > 0 {
             self.on_target_kmers += 1;
         }
+
+        let mut set_mm = true;
         for x in v.iter_mut() {
             if *x == 0 {
                 *x = r + 1;
+                self.total_hits += 1;
                 set_mm = false;
                 break;
             } else if (*x == r + 1) || (*x & 0x80000000) != 0 {
@@ -69,6 +74,8 @@ impl KmerWork {
         if set_mm {
             self.kmers[km] = [0x80000000, 0, 0, 0, 0, 0, 0, 0];
             self.highly_redundant_kmers += 1;
+            assert!(self.total_hits >= MAX_HITS as u64);
+            self.total_hits -= MAX_HITS as u64;
         }
     }
 
@@ -83,6 +90,9 @@ impl KmerWork {
     }
     pub fn on_target_kmers(&self) -> u64 {
         self.on_target_kmers
+    }
+    pub fn total_hits(&self) -> u64 {
+        self.total_hits + self.on_target_kmers - self.mapped_kmers
     }
 }
 

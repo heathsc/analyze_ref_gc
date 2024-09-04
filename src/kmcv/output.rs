@@ -26,7 +26,7 @@ fn u64_to_buf(b: &mut [u8], x: u64) {
 }
 
 struct KmcvHeader {
-    buf: [u8; 44],
+    buf: [u8; 52],
 }
 
 impl KmcvHeader {
@@ -36,8 +36,9 @@ impl KmcvHeader {
         let mapped = k_work.mapped_kmers();
         let redundant = k_work.highly_redundant_kmers();
         let on_target = k_work.on_target_kmers();
+        let total_hits = k_work.total_hits();
 
-        let mut buf = [0; 44];
+        let mut buf = [0; 52];
 
         buf[0..4].copy_from_slice(&[b'K', b'M', b'C', b'V']);
         buf[4] = MAJOR_VERSION;
@@ -49,7 +50,8 @@ impl KmcvHeader {
         u32_to_buf(&mut buf[16..20], n_targets);
         u64_to_buf(&mut buf[20..28], mapped);
         u64_to_buf(&mut buf[28..36], on_target);
-        u64_to_buf(&mut buf[36..], redundant);
+        u64_to_buf(&mut buf[36..44], redundant);
+        u64_to_buf(&mut buf[44..], total_hits);
 
         Self { buf }
     }
@@ -189,7 +191,6 @@ fn write_kmer_blocks<W: Write>(w: &mut W, kmers: &[KmerVec]) -> anyhow::Result<(
     for (k, v) in kmers.iter().enumerate() {
         let kmer = k as u32;
         let ktype = KmerType::from_kmer_vec(v);
-
         if ktype != KmerType::Unmapped {
             write_kmer_block(w, v, kmer - prev, ktype)?;
             prev = kmer
