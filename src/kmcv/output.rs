@@ -131,10 +131,10 @@ impl KmerType {
     fn type_code(&self) -> u8 {
         match self {
             Self::Unmapped => 15,
-            Self::UniqueOnTarget => 1,
+            Self::UniqueOnTarget => 0,
             Self::LowMultiMap(x) => *x - 1,
-            Self::UniqueOffTarget => 9,
-            Self::HighMultiMap => 8,
+            Self::UniqueOffTarget => 8,
+            Self::HighMultiMap => 9,
         }
     }
 }

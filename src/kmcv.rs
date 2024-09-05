@@ -31,7 +31,8 @@
 ///     uniquely off target, in which case nothing is written. An off target hit is marked using a
 ///     contig id of 0.
 ///
-/// kmers: [u8;...]  KMERS are encoded as 2 bits per base, first bases in MSB. Unused bits should be set to zero. Bytes stored in network order.
+/// kmers: [u8;...]  KMERS are encoded as 2 bits per base, first bases in MSB. Unused bits should
+/// be set to zero. Bytes stored in network order.
 ///
 /// EOF block
 /// rnd_id: u32 (should be the same as in the header)
@@ -45,8 +46,8 @@
 ///   1: kmer maps twice (can be on and off target)
 ///   ...
 ///   7: kmer maps 8 times
-///   8: kmer maps >8 times
-///   9: kmer maps once off target
+///   8: kmer maps once off target
+///   9: kmer maps >8 times
 ///   10-14: undefined
 ///   15: kmer unmapped
 ///
