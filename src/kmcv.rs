@@ -20,7 +20,7 @@
 ///   name: name_length * u8
 ///
 /// TARGET BLOCK (repeated n_targets times)
-///   contig_id: u32 (starts from 1)
+///   contig_id: u32 (starts from 0)
 ///   start: u32
 ///   end: u32
 ///
