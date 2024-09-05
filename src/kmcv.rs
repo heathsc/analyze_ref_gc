@@ -16,7 +16,7 @@
 /// total_hits: u64
 ///
 /// CONTIG BLOCK (Repeated n_contig times)
-///   name_length: u32
+///   name_length: u16
 ///   name: name_length * u8
 ///
 /// TARGET BLOCK (repeated n_targets times)

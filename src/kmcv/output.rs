@@ -79,8 +79,11 @@ fn write_target_blocks<W: Write>(w: &mut W, reg: &Regions) -> anyhow::Result<()>
 
 fn write_contig_blocks<W: Write>(w: &mut W, reg: &Regions) -> anyhow::Result<()> {
     for (ctg, _) in reg.iter() {
-        let l = ctg.len() as u32;
-        w.write_all(&l.to_le_bytes())
+        let l = ctg.len();
+        if l > u16::MAX as usize {
+            return Err(anyhow!("Contig name is too long (size is {l}, max is {}", u16::MAX))
+        }
+        w.write_all(&(l as u16).to_le_bytes())
             .with_context(|| "Error writing contig name length")?;
         w.write_all(ctg.as_bytes())
             .with_context(|| "Error writing contig name")?;
