@@ -81,7 +81,10 @@ fn write_contig_blocks<W: Write>(w: &mut W, reg: &Regions) -> anyhow::Result<()>
     for (ctg, _) in reg.iter() {
         let l = ctg.len();
         if l > u16::MAX as usize {
-            return Err(anyhow!("Contig name is too long (size is {l}, max is {}", u16::MAX))
+            return Err(anyhow!(
+                "Contig name is too long (size is {l}, max is {}",
+                u16::MAX
+            ));
         }
         w.write_all(&(l as u16).to_le_bytes())
             .with_context(|| "Error writing contig name length")?;
