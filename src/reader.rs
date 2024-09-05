@@ -199,10 +199,7 @@ impl<'a, R: BufRead> Rdr<'a, R> {
                     RdrState::StartSeqAfterNewLine => proc_start_seq_after_new_line(*c)?,
                     RdrState::InSeqId => (proc_in_seq_id(*c, &mut self.seq_id)?, false),
                     RdrState::NewContig => {
-                        debug!(
-                            "Starting reading contig {}\n{}",
-                            self.seq_id, seq_work.k_work
-                        );
+                        debug!("Starting reading contig {}", self.seq_id);
                         if let Some(regs) = ts.as_mut() {
                             regs.new_contig(&self.seq_id)
                         }
