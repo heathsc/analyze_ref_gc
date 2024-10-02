@@ -65,10 +65,12 @@ impl ContigRegions {
             let mut pending: Option<Region> = None;
             for reg in self.regions.drain(..) {
                 if let Some(mut p) = pending.take() {
+                    // Check for overlap when regions are extended
                     if p.end() >= reg.start() {
                         if p.end() < reg.end() {
                             p.size = reg.end() - p.start
                         }
+                        pending = Some(p)
                     } else {
                         ix += 1;
                         p.idx = ix.try_into().unwrap();

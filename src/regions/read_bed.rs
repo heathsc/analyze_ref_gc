@@ -5,7 +5,7 @@ use compress_io::compress::CompressIo;
 
 use super::{Region, Regions};
 
-pub fn read_bed<P: AsRef<Path>>(path: P, extend: u32) -> anyhow::Result<Regions> {
+pub fn read_bed<P: AsRef<Path>>(path: P) -> anyhow::Result<Regions> {
     let mut rdr = CompressIo::new()
         .path(path)
         .bufreader()
@@ -44,14 +44,11 @@ pub fn read_bed<P: AsRef<Path>>(path: P, extend: u32) -> anyhow::Result<Regions>
             ));
         }
 
-        // Avoid underflow
-        let start1 = start.saturating_sub(extend);
-
         line += 1;
         regs.get_or_insert_contig_regions(ctg)
             .add_region(Region::new(
-                start1,
-                end + extend - start1,
+                start,
+                end - start,
                 NonZeroU32::try_from(line).unwrap(),
             ));
 

@@ -81,16 +81,6 @@ pub(super) fn cli_model() -> Command {
                 .help("BED file with target regions (for targetted sequencing)"),
         )
         .arg(
-            Arg::new("target_extend")
-                .long("target-extend")
-                .short('x')
-                .value_parser(value_parser!(u32))
-                .value_name("INT")
-                .requires("targets")
-                .default_value("100")
-                .help("Amount by which to extend target regions"),
-        )
-        .arg(
             Arg::new("read_lengths")
                 .short('r')
                 .long("read_lengths")

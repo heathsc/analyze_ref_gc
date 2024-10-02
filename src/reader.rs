@@ -188,10 +188,11 @@ impl<'a, R: BufRead> Rdr<'a, R> {
                     None
                 };
                 trace!(
-                    "pos = {}, idx = {:?}, state = {:?}",
+                    "pos = {}, idx = {:?}, state = {:?}, kmer = {:?}",
                     self.pos,
                     idx,
-                    self.state
+                    self.state,
+                    seq_work.k_build.kmers(),
                 );
                 let (new_state, inc_pos) = match self.state {
                     RdrState::Start => (proc_start(*c)?, false),
